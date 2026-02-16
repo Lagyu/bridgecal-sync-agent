@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.dist/
+.build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+
+# Local state
+*.log
+*.sqlite
+*.db
+BridgeCal/
+.env
+.env.*
+
+# OAuth secrets
+google_client_secret*.json
+google_token*.json

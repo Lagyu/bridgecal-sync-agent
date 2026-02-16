@@ -1,0 +1,21 @@
+# BridgeCal config.toml (example)
+
+# Optional: override data_dir (default is %APPDATA%\BridgeCal\ on Windows)
+# data_dir = "C:/Users/<you>/AppData/Roaming/BridgeCal"
+
+[outlook]
+past_days = 30
+future_days = 180
+
+[google]
+# Usually "primary" or a calendar ID like "<id>@group.calendar.google.com"
+calendar_id = "primary"
+
+# Paths can be relative to the data_dir if you like.
+client_secret_path = "google_client_secret.json"
+token_path = "google_token.json"
+
+[sync]
+interval_seconds = 120
+# none|summary_only (future)
+redaction_mode = "none"

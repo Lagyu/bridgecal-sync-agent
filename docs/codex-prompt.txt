@@ -1,0 +1,81 @@
+You are Codex, a software engineering agent working in a git repository.
+
+Goal: implement BridgeCal, a **single-user** Outlook ↔ Google Calendar sync agent, following the spec in this repo.
+
+Read and follow these files first:
+- AGENTS.md (repo root)
+- docs/index.md
+- docs/requirements.md (acceptance criteria are here)
+- docs/architecture.md
+- docs/sync.md
+- docs/privacy-and-sharing.md
+
+Hard constraints (do not violate):
+- Outlook access MUST be via Outlook desktop COM automation on Windows (no Microsoft Graph/EWS/REST).
+- Sync runs locally; no always-on server required.
+- Never send cross-company invites or email updates when creating mirrored events.
+- Mirror privacy must be enforced:
+  - Google mirrors must use visibility="private" and transparency="opaque".
+  - Outlook mirrors must use Sensitivity=olPrivate and BusyStatus=Busy.
+- One user only. Keep it pragmatic; avoid overengineering.
+
+Deliverables:
+1) Implement OutlookClient (src/bridgecal/outlook_client.py) using pywin32:
+   - list_events(window_start, window_end) -> CanonicalEvent[]
+   - upsert_mirror(source) -> outlook_id
+   - delete_event(outlook_id)
+   Requirements:
+   - Scan default calendar; use Items.IncludeRecurrences=True.
+   - Store mirror markers via UserProperties:
+     - BridgeCalOrigin = "google" for Google→Outlook mirrors
+     - BridgeCalGoogleId = "<google_event_id>"
+   - Do not create meetings (no recipients). Create appointments only.
+   - Set Sensitivity=olPrivate and BusyStatus=Busy for mirrors.
+
+2) Implement GoogleClient (src/bridgecal/google_client.py) using Google Calendar API v3:
+   - OAuth installed-app flow using the config paths.
+   - list_events(window_start, window_end) -> CanonicalEvent[]
+     - Use singleEvents=True to expand recurring instances in the window.
+   - upsert_mirror(source) -> google_event_id
+   - delete_event(google_event_id)
+   Requirements:
+   - Store mirror markers via extendedProperties.private:
+     - bridgecal.origin = "outlook" for Outlook→Google mirrors
+     - bridgecal.outlook_id = "<outlook_id>"
+   - Insert/update with sendUpdates="none".
+   - Set visibility="private" and transparency="opaque" for mirrors.
+
+3) Implement SyncEngine reconciliation (src/bridgecal/sync/engine.py) per docs/sync.md:
+   - Loop prevention: never mirror items that already have BridgeCal markers.
+   - Use MappingStore (SQLite) to keep stable pairs.
+   - Handle create/update/delete both directions.
+   - Conflict resolution: last-write-wins using last_modified / updated timestamps; prefer Outlook if ambiguous.
+   - Be idempotent: running twice with no changes should produce no net diffs.
+
+4) Wire the CLI:
+   - bridgecal doctor: validate Outlook COM works + Google auth refresh + SQLite writable.
+   - bridgecal sync --once and --daemon: run engine, emit summary counts.
+
+5) Testing:
+   - Expand unit tests in tests/ to cover:
+     - loop prevention
+     - create/update/delete actions
+     - idempotency (two consecutive runs)
+   - Keep tests deterministic (use fakes; no live Outlook/Google).
+   - If you add optional integration tests, gate them behind an env var and skip by default.
+
+6) Documentation:
+   - Update docs/runbook.md and docs/troubleshooting.md with any new commands, file paths, and caveats found during implementation.
+
+Quality gates:
+- uv run ruff check .
+- uv run ruff format --check .
+- uv run mypy .
+- uv run pytest -q
+
+Implementation guidance:
+- Keep COM code isolated and defensive.
+- Minimize dependencies and keep functions small.
+- Do not log sensitive event descriptions by default.
+
+Proceed autonomously. If something is ambiguous, choose the simplest viable approach consistent with docs/requirements.md and record the assumption in docs/requirements.md under a short “Assumptions” section.
