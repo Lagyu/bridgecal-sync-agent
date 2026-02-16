@@ -1,15 +1,15 @@
 # BridgeCal Sync Agent
 
-[日本語版 README](README.ja.md)
+[English README](README.en.md)
 
-BridgeCal is a **single-user**, **local** sync agent that keeps two calendars aligned:
+BridgeCal は、2 つのカレンダーを同期する **単一ユーザー向け**・**ローカル実行** の同期エージェントです。
 
-- Microsoft Outlook desktop calendar (A company, Windows; no Graph/EWS allowed)
-- Google Calendar (B company)
+- Microsoft Outlook デスクトップ カレンダー（A 社、Windows、Graph/EWS 不可）
+- Google カレンダー（B 社）
 
-The agent runs only while the A-company PC is on.
+エージェントは A 社 PC の電源が入っている間だけ動作します。
 
-## Quickstart (dev)
+## クイックスタート（開発）
 
 ```bash
 uv sync
@@ -17,49 +17,49 @@ uv run bridgecal doctor
 uv run bridgecal sync --once
 ```
 
-## Deploy On Windows
+## Windows へのデプロイ
 
-BridgeCal requires:
-- Outlook desktop configured on the machine (COM access)
-- Google OAuth client secret JSON for an OAuth **Desktop app**
-- Python 3.12+
+BridgeCal の実行には以下が必要です。
+- Outlook デスクトップがそのマシンで設定済みであること（COM アクセス）
+- OAuth **Desktop app** 用の Google OAuth クライアントシークレット JSON
+- Python 3.12 以上
 
-No Google API key is required.
+Google API キーは不要です。
 
-### One-command deploy (PowerShell)
+### ワンコマンドデプロイ（PowerShell）
 
-Run from repo root:
+リポジトリのルートで実行してください。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-bridgecal.ps1
 ```
 
-What the script does:
-- installs Python 3.12+ via `winget` if missing
-- installs `uv` via `winget` if missing (falls back to official installer)
-- runs `uv sync`
-- creates `%APPDATA%\BridgeCal\config.toml`
-- prompts for Google calendar ID
-- prompts for Google OAuth client secret (file path or pasted JSON)
-- runs `uv run bridgecal doctor`
-- optionally runs initial `uv run bridgecal sync --once`
-- optionally creates a startup scheduled task
+このスクリプトで実行される内容:
+- Python 3.12+ がなければ `winget` でインストール
+- `uv` がなければ `winget` でインストール（失敗時は公式インストーラにフォールバック）
+- `uv sync` を実行
+- `%APPDATA%\BridgeCal\config.toml` を作成
+- Google カレンダー ID を対話で入力
+- Google OAuth クライアントシークレットを対話で入力（ファイルパスまたは JSON 貼り付け）
+- `uv run bridgecal doctor` を実行
+- 任意で `uv run bridgecal sync --once` を初回実行
+- 任意でログオン時起動のタスクスケジューラを作成
 
-Note: Outlook is not installed by this script; Outlook desktop must already be installed and configured.
+注意: Outlook はこのスクリプトではインストールされません。Outlook デスクトップは事前にインストール・設定が必要です。
 
-Optional flags:
+オプション:
 
 ```powershell
 .\scripts\deploy-bridgecal.ps1 -IntervalSeconds 120 -SkipScheduledTask
 ```
 
-### Daemon runner script
+### デーモン起動用スクリプト
 
-If needed directly (for Task Scheduler action):
+必要に応じて直接実行できます（タスクスケジューラの Action 用）。
 
 ```powershell
 .\scripts\run-bridgecal-daemon.ps1 -IntervalSeconds 120 -ConfigPath "$env:APPDATA\BridgeCal\config.toml"
 ```
 
-Docs:
+ドキュメント:
 - `docs/index.md`
