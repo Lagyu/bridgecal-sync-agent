@@ -1,8 +1,8 @@
-# BridgeCal Sync Agent
+# かんたん予定同期（BridgeCal）
 
 [English README](README.en.md)
 
-BridgeCal は、2 つのカレンダーを同期する **単一ユーザー向け**・**ローカル実行** の同期エージェントです。
+かんたん予定同期（内部名: BridgeCal）は、2 つのカレンダーを同期する **単一ユーザー向け**・**ローカル実行** の同期エージェントです。
 
 - Microsoft Outlook デスクトップ カレンダー（A 社、Windows、Graph/EWS 不可）
 - Google カレンダー（B 社）
@@ -15,14 +15,17 @@ BridgeCal は、2 つのカレンダーを同期する **単一ユーザー向�
 uv sync
 uv run bridgecal doctor
 uv run bridgecal sync --once
+uv run bridgecal availability --text "明日の10時から17時"
+uv run bridgecal gui
 ```
 
 ## Windows へのデプロイ
 
-BridgeCal の実行には以下が必要です。
+かんたん予定同期（BridgeCal）の実行には以下が必要です。
 - Outlook デスクトップがそのマシンで設定済みであること（COM アクセス）
 - OAuth **Desktop app** 用の Google OAuth クライアントシークレット JSON
 - Python 3.12 以上
+- 初回の空き時間チェック時は、ローカル LFM モデル取得で時間がかかることがあります
 
 Google API キーは不要です。
 
@@ -60,6 +63,42 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-bridgecal.p
 ```powershell
 .\scripts\run-bridgecal-daemon.ps1 -IntervalSeconds 120 -ConfigPath "$env:APPDATA\BridgeCal\config.toml"
 ```
+
+### 任意: Windows GUI（手動同期 + スケジューラ設定）
+
+起動:
+
+```powershell
+uv run bridgecal gui --config "$env:APPDATA\BridgeCal\config.toml"
+```
+
+依存関係の自動インストールを含めて GUI を起動する場合:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-bridgecal-gui.ps1
+```
+
+オプション:
+
+```powershell
+.\scripts\run-bridgecal-gui.ps1 -ConfigPath "$env:APPDATA\BridgeCal\config.toml" -NoSync
+```
+
+GUI でできること:
+- はじめてセットアップ（Google カレンダーID + OAuth クライアントシークレット設定）
+- 手動ワンタイム同期
+- doctor チェック
+- 管理者昇格（UAC）付きのタスクスケジューラ作成/削除
+- 空き時間チェック（専用ポップアップで音声入力/テキスト入力）
+  - モデル選択: `LiquidAI/LFM2.5-1.2B-Thinking` / `Qwen/Qwen3-1.7B`
+  - thinking モード固定 + 最大出力 16384 トークン
+  - ポップアップ内の専用ログ欄に `<think>...</think>` と `<answer>...</answer>` を逐次表示
+- UI は日本語が初期表示で、言語切替で英語表示に変更可能
+
+空き時間パースでローカル LFM2.5 を使う場合:
+- `transformers` + `torch` を利用します
+- `BRIDGECAL_LFM25_LOCAL_MODEL` でモデル ID を指定（既定: `LiquidAI/LFM2.5-1.2B-Instruct`）
+- 必要に応じて `BRIDGECAL_LFM25_LOCAL_DEVICE`（`cpu` / `auto`）と `BRIDGECAL_LFM25_LOCAL_TORCH_DTYPE` を指定
 
 ドキュメント:
 - `docs/index.md`

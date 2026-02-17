@@ -1,0 +1,15 @@
+BridgeCal CEO向け配布パッケージ（日本語）
+
+0) （まだの場合は）Zipファイルを展開する
+1) このフォルダで PowerShell を開く(このフォルダのエクスプローラーのアドレスバーに、「powershell」と入力すると開けます)
+2) 次を実行:
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-bridgecal-gui.ps1
+3) GUIで「0. はじめてセットアップ」を押して案内に従う
+
+同梱ファイル:
+- Googleクライアントシークレット: .\google_client_secret.json
+  - Googleクライアントシークレットファイルは、ほかの人には共有しないでください。
+- 詳細手順: .\docs\ceo-setup-ja.md
+
+前提:
+- Outlook（クラシック版）がPCにインストール・設定済みであること

@@ -37,6 +37,13 @@ Run:
 - `uv run bridgecal doctor`
 - `uv run bridgecal sync --once`
 
+Optional GUI (Windows):
+- `uv run bridgecal gui --config "%APPDATA%\\BridgeCal\\config.toml"`
+- supports manual sync, doctor, and elevated scheduler setup/removal
+- includes a first-time setup assistant for calendar ID + client secret
+- includes an availability popup (voice/text input) for checking free/busy time ranges
+- auto-bootstrap launcher: `powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-bridgecal-gui.ps1`
+
 If successful, it will create:
 - `%APPDATA%\BridgeCal\state.db`
 - `%APPDATA%\BridgeCal\bridgecal.log`

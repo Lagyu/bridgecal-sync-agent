@@ -75,3 +75,15 @@ Symptoms:
 Actions:
 - Run via `uv run bridgecal ...` from the repo root.
 - Ensure dependencies are installed with `uv sync`.
+
+## Voice input DLL initialization failure (`WinError 1114`, `c10.dll`)
+
+Symptoms:
+- Voice input popup fails with an error similar to:
+  `[WinError 1114] ... torch\\lib\\c10.dll`
+
+Actions:
+- Run the GUI launcher script instead of direct `uv run`:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-bridgecal-gui.ps1`
+- The launcher now verifies runtime imports (`torch`, `faster_whisper`, etc.) and attempts targeted reinstall automatically.
+- If it still fails, install Microsoft Visual C++ Redistributable (x64), then re-run the launcher.

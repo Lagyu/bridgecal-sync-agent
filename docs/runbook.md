@@ -35,6 +35,8 @@ Doctor exit codes:
 - One sync pass: `uv run bridgecal sync --once`
 - Daemon mode: `uv run bridgecal sync --daemon --interval 120`
 - Debug logging: add `--debug` to either command
+- Windows GUI: `uv run bridgecal gui --config "%APPDATA%\\BridgeCal\\config.toml"`
+- Windows GUI launcher (auto Python/uv/sync): `powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-bridgecal-gui.ps1`
 
 ## Backups
 

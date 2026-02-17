@@ -57,9 +57,22 @@ def sync(
     run_daemon = daemon or not once
 
     def run_one_pass() -> None:
+        def emit_progress(done: int, total: int, stage: str) -> None:
+            safe_total = max(total, 1)
+            safe_done = min(max(done, 0), safe_total)
+            percent = int((safe_done * 100) / safe_total)
+            typer.echo(
+                "sync_progress: "
+                f"done={safe_done} "
+                f"total={safe_total} "
+                f"percent={percent} "
+                f"stage={stage}"
+            )
+
         stats = engine.run_once(
             past_days=cfg.outlook.past_days,
             future_days=cfg.outlook.future_days,
+            progress=emit_progress,
         )
         typer.echo(
             "sync: "

@@ -15,6 +15,13 @@ dependencies = [
   "google-api-python-client>=2.120.0",
   "google-auth-oauthlib>=1.2.0",
   "google-auth-httplib2>=0.2.0",
+  "PyQt6>=6.7; platform_system == 'Windows'",
+  "transformers>=4.57.0",
+  "torch>=2.8.0",
+  "huggingface-hub>=0.36.0",
+  "faster-whisper>=1.1.1",
+  "sounddevice>=0.5.2; platform_system == 'Windows'",
+  "soundfile>=0.13.1; platform_system == 'Windows'",
   "tzdata>=2024.1; platform_system == 'Windows'",
   # Outlook COM automation (Windows only)
   "pywin32>=306; platform_system == 'Windows'",

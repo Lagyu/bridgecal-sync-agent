@@ -100,5 +100,7 @@ def test_apply_source_to_appointment_sets_startutc_for_timed_events() -> None:
     OutlookClient()._apply_source_to_appointment(item, source)
 
     assert item.AllDayEvent is False
+    assert source.time.start_dt is not None
+    assert source.time.end_dt is not None
     assert item.StartUTC == source.time.start_dt.astimezone(UTC)
     assert item.EndUTC == source.time.end_dt.astimezone(UTC)

@@ -71,11 +71,27 @@ function Ensure-Winget {
 function Install-WithWinget {
     param(
         [string]$PackageId,
-        [string]$FriendlyName
+        [string]$FriendlyName,
+        [string]$Scope = "user",
+        [string]$Override = ""
     )
 
     Write-Step "Installing $FriendlyName via winget ($PackageId)..."
-    & winget install --id $PackageId -e --scope user --accept-source-agreements --accept-package-agreements
+    $args = @(
+        "install",
+        "--id", $PackageId,
+        "-e",
+        "--accept-source-agreements",
+        "--accept-package-agreements"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Scope)) {
+        $args += @("--scope", $Scope)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Override)) {
+        $args += @("--override", $Override)
+    }
+
+    & winget @args
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -139,6 +155,47 @@ function Ensure-Uv {
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         Fail "uv installation failed. Install uv manually, then re-run this script."
     }
+}
+
+function Test-BridgeCalRuntimeDependencies {
+    $probeScript = @'
+import importlib
+import sys
+
+modules = (
+    "torch",
+    "faster_whisper",
+    "ctranslate2",
+    "sounddevice",
+    "soundfile",
+    "transformers",
+)
+failures = []
+for name in modules:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        failures.append(f"{name}: {type(exc).__name__}: {exc}")
+
+if failures:
+    sys.stderr.write("\n".join(failures) + "\n")
+    raise SystemExit(1)
+'@
+
+    & uv run python -c $probeScript
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Repair-BridgeCalRuntimeDependencies {
+    Write-Step "Attempting targeted runtime dependency reinstall..."
+    & uv sync `
+        --reinstall-package torch `
+        --reinstall-package faster-whisper `
+        --reinstall-package ctranslate2 `
+        --reinstall-package sounddevice `
+        --reinstall-package soundfile `
+        --reinstall-package transformers
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Stop-RunningBridgeCal {
@@ -449,6 +506,23 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
 if (-not $syncSucceeded) {
     Pop-Location
     Fail "uv sync failed."
+}
+
+Write-Step "Verifying runtime dependency imports..."
+if (-not (Test-BridgeCalRuntimeDependencies)) {
+    if (-not (Repair-BridgeCalRuntimeDependencies)) {
+        Pop-Location
+        Fail "Targeted dependency reinstall failed."
+    }
+
+    Write-Step "Re-checking runtime dependency imports..."
+    if (-not (Test-BridgeCalRuntimeDependencies)) {
+        Pop-Location
+        Fail (
+            "Runtime dependencies still failed to import. Install Microsoft Visual C++ " +
+            "Redistributable (x64), then re-run this script."
+        )
+    }
 }
 Pop-Location
 

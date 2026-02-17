@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -58,7 +58,13 @@ class SyncEngine:
         self.google = google
         self.store = store
 
-    def run_once(self, past_days: int, future_days: int, now: datetime | None = None) -> SyncStats:
+    def run_once(
+        self,
+        past_days: int,
+        future_days: int,
+        now: datetime | None = None,
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> SyncStats:
         now = now or datetime.now(UTC)
         window_start = now - timedelta(days=past_days)
         window_end = now + timedelta(days=future_days)
@@ -77,10 +83,43 @@ class SyncEngine:
         stats.outlook_mirrors = len(outlook_all) - len(outlook_sources)
         stats.google_mirrors = len(google_all) - len(google_sources)
 
+        rows = list(self.store.list_all())
+        predicted_consumed_outlook = {
+            row.outlook_id
+            for row in rows
+            if row.origin == "outlook" and row.outlook_id in outlook_sources
+        }
+        predicted_consumed_google = {
+            row.google_id
+            for row in rows
+            if row.origin == "google" and row.google_id in google_sources
+        }
+        remaining_outlook_sources = len(outlook_sources) - len(predicted_consumed_outlook)
+        remaining_google_sources = len(google_sources) - len(predicted_consumed_google)
+
+        progress_total = max(
+            1,
+            2 + len(rows) + remaining_outlook_sources + remaining_google_sources,
+        )
+        progress_done = 0
+
+        def emit_progress(stage: str) -> None:
+            if progress is None:
+                return
+            try:
+                progress(progress_done, progress_total, stage)
+            except Exception:
+                logger.debug("sync progress callback failed", exc_info=True)
+
+        progress_done += 1
+        emit_progress("scan_outlook")
+        progress_done += 1
+        emit_progress("scan_google")
+
         consumed_outlook_sources: set[str] = set()
         consumed_google_sources: set[str] = set()
 
-        for row in self.store.list_all():
+        for row in rows:
             if row.origin == "outlook":
                 self._reconcile_outlook_origin(
                     row=row,
@@ -89,15 +128,16 @@ class SyncEngine:
                     google_all=google_all,
                     consumed_outlook_sources=consumed_outlook_sources,
                 )
-                continue
-
-            self._reconcile_google_origin(
-                row=row,
-                stats=stats,
-                google_sources=google_sources,
-                outlook_all=outlook_all,
-                consumed_google_sources=consumed_google_sources,
-            )
+            else:
+                self._reconcile_google_origin(
+                    row=row,
+                    stats=stats,
+                    google_sources=google_sources,
+                    outlook_all=outlook_all,
+                    consumed_google_sources=consumed_google_sources,
+                )
+            progress_done += 1
+            emit_progress("reconcile")
 
         for source in outlook_sources.values():
             if source.source_id in consumed_outlook_sources:
@@ -113,6 +153,8 @@ class SyncEngine:
                 )
             )
             stats.created_in_google += 1
+            progress_done += 1
+            emit_progress("create_google")
 
         for source in google_sources.values():
             if source.source_id in consumed_google_sources:
@@ -128,6 +170,12 @@ class SyncEngine:
                 )
             )
             stats.created_in_outlook += 1
+            progress_done += 1
+            emit_progress("create_outlook")
+
+        if progress_done < progress_total:
+            progress_done = progress_total
+        emit_progress("finalize")
 
         logger.info(
             "sync summary outlook_scanned=%s google_scanned=%s outlook_sources=%s google_sources=%s outlook_mirrors=%s google_mirrors=%s create_g=%s update_g=%s delete_g=%s create_o=%s update_o=%s delete_o=%s",
