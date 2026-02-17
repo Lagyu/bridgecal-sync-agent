@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
@@ -7,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from importlib import import_module, util
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .sync.models import CanonicalEvent, EventTime, compute_fingerprint
 
@@ -35,17 +37,89 @@ google_discovery = (
 google_errors = (
     import_module("googleapiclient.errors") if util.find_spec("googleapiclient.errors") else None
 )
+google_auth_httplib2 = (
+    import_module("google_auth_httplib2") if util.find_spec("google_auth_httplib2") else None
+)
+httplib2 = import_module("httplib2") if util.find_spec("httplib2") else None
+requests_module = import_module("requests") if util.find_spec("requests") else None
+urllib3 = import_module("urllib3") if util.find_spec("urllib3") else None
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 MARKER_ORIGIN_KEY = "bridgecal.origin"
 MARKER_OUTLOOK_ID_KEY = "bridgecal.outlook_id"
+UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read {label}: {path}") from exc
+
+    if raw.startswith(UTF8_BOM):
+        raise RuntimeError(
+            f"{label} must be encoded as UTF-8 without BOM: {path}",
+        )
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{label} must be UTF-8 text: {path}") from exc
+
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{label} is not valid JSON: {path}") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{label} must be a JSON object: {path}")
+    return payload
+
+
+def _validate_desktop_client_secret_config(payload: dict[str, Any], path: Path) -> None:
+    installed_raw = payload.get("installed")
+    if not isinstance(installed_raw, dict):
+        raise RuntimeError(
+            "Google client secret JSON must contain an 'installed' object. "
+            "Create OAuth Client ID type 'Desktop app' and download the JSON file."
+        )
+
+    required_fields = ("client_id", "client_secret", "auth_uri", "token_uri", "redirect_uris")
+    missing = [name for name in required_fields if not installed_raw.get(name)]
+    if missing:
+        raise RuntimeError(
+            "Google client secret JSON is missing required field(s): "
+            f"{', '.join(missing)} ({path})."
+        )
+
+    redirect_uris = installed_raw["redirect_uris"]
+    if not isinstance(redirect_uris, list):
+        raise RuntimeError(f"Google client secret redirect_uris must be a list ({path}).")
+
+    has_local_redirect = any(
+        isinstance(uri, str)
+        and (uri.startswith("http://localhost") or uri.startswith("http://127.0.0.1"))
+        for uri in redirect_uris
+    )
+    if not has_local_redirect:
+        raise RuntimeError(
+            "Google client secret JSON is not a valid Desktop app credential. "
+            "redirect_uris must include localhost/127.0.0.1."
+        )
 
 
 class GoogleClient:
-    def __init__(self, calendar_id: str, client_secret_path: Path, token_path: Path) -> None:
+    def __init__(
+        self,
+        calendar_id: str,
+        client_secret_path: Path,
+        token_path: Path,
+        insecure_tls_skip_verify: bool = True,
+    ) -> None:
         self.calendar_id = calendar_id
         self.client_secret_path = client_secret_path
         self.token_path = token_path
+        self.insecure_tls_skip_verify = insecure_tls_skip_verify
         self._credentials: Any | None = None
         self._service: Any | None = None
 
@@ -128,11 +202,27 @@ class GoogleClient:
         credentials = self._ensure_credentials()
         if google_discovery is None:
             raise RuntimeError("google-api-python-client is unavailable.")
+
+        if self.insecure_tls_skip_verify:
+            if google_auth_httplib2 is None or httplib2 is None:
+                raise RuntimeError(
+                    "google-auth-httplib2 and httplib2 are required for insecure TLS mode.",
+                )
+            insecure_http = httplib2.Http(disable_ssl_certificate_validation=True)
+            authorized_http = google_auth_httplib2.AuthorizedHttp(
+                credentials=credentials,
+                http=insecure_http,
+            )
+            self._service = google_discovery.build(
+                "calendar",
+                "v3",
+                http=authorized_http,
+                cache_discovery=False,
+            )
+            return self._service
+
         self._service = google_discovery.build(
-            "calendar",
-            "v3",
-            credentials=credentials,
-            cache_discovery=False,
+            "calendar", "v3", credentials=credentials, cache_discovery=False
         )
         return self._service
 
@@ -145,25 +235,40 @@ class GoogleClient:
 
         creds: Any | None = None
         if self.token_path.exists():
-            creds = google_credentials.Credentials.from_authorized_user_file(
-                str(self.token_path), SCOPES
-            )
+            token_payload = _load_json_object(self.token_path, label="Google token JSON")
+            try:
+                creds = google_credentials.Credentials.from_authorized_user_info(
+                    token_payload, SCOPES
+                )
+            except ValueError as exc:
+                raise RuntimeError(f"Google token JSON is invalid: {self.token_path}") from exc
 
         if creds is not None and creds.valid:
             self._credentials = creds
             return creds
 
         if creds is not None and creds.expired and creds.refresh_token:
-            creds.refresh(google_requests.Request())
+            creds.refresh(self._google_request())
         else:
             if not self.client_secret_path.exists():
                 raise RuntimeError(
                     f"Google client secret JSON not found: {self.client_secret_path}",
                 )
-            flow = google_oauth_flow.InstalledAppFlow.from_client_secrets_file(
-                str(self.client_secret_path),
+            client_config = _load_json_object(
+                self.client_secret_path,
+                label="Google client secret JSON",
+            )
+            _validate_desktop_client_secret_config(client_config, self.client_secret_path)
+            flow = google_oauth_flow.InstalledAppFlow.from_client_config(
+                client_config,
                 SCOPES,
             )
+            if self.insecure_tls_skip_verify:
+                oauth2session = getattr(flow, "oauth2session", None)
+                if oauth2session is not None:
+                    oauth2session.verify = False
+                if urllib3 is not None:
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             creds = flow.run_local_server(port=0)
 
         self.token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +276,19 @@ class GoogleClient:
 
         self._credentials = creds
         return creds
+
+    def _google_request(self) -> Any:
+        if google_requests is None:
+            raise RuntimeError("Google auth dependencies are unavailable.")
+
+        if not self.insecure_tls_skip_verify or requests_module is None:
+            return google_requests.Request()
+
+        if urllib3 is not None:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        session = requests_module.Session()
+        session.verify = False
+        return google_requests.Request(session=session)
 
     def _to_canonical(self, raw: dict[str, Any]) -> CanonicalEvent | None:
         if raw.get("status") == "cancelled":
@@ -214,9 +332,13 @@ class GoogleClient:
             return EventTime(start_date=start_date, end_date=end_date)
 
         start_dt = self._parse_rfc3339(
-            start_raw.get("dateTime") if isinstance(start_raw, dict) else None
+            start_raw.get("dateTime") if isinstance(start_raw, dict) else None,
+            start_raw.get("timeZone") if isinstance(start_raw, dict) else None,
         )
-        end_dt = self._parse_rfc3339(end_raw.get("dateTime") if isinstance(end_raw, dict) else None)
+        end_dt = self._parse_rfc3339(
+            end_raw.get("dateTime") if isinstance(end_raw, dict) else None,
+            end_raw.get("timeZone") if isinstance(end_raw, dict) else None,
+        )
         if start_dt is None or end_dt is None:
             raise ValueError("Google event missing start/end")
         return EventTime(start_dt=start_dt, end_dt=end_dt)
@@ -226,14 +348,23 @@ class GoogleClient:
             return None
         return date.fromisoformat(value)
 
-    def _parse_rfc3339(self, value: Any) -> datetime | None:
+    def _parse_rfc3339(self, value: Any, timezone_name: Any = None) -> datetime | None:
         if not isinstance(value, str):
             return None
         text = value.replace("Z", "+00:00")
         parsed = datetime.fromisoformat(text)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
+            tz = self._resolve_tzinfo(timezone_name)
+            return parsed.replace(tzinfo=tz or UTC)
         return parsed
+
+    def _resolve_tzinfo(self, timezone_name: Any) -> ZoneInfo | None:
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            return None
+        try:
+            return ZoneInfo(timezone_name.strip())
+        except ZoneInfoNotFoundError:
+            return None
 
     def _rfc3339(self, value: datetime) -> str:
         normalized = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)

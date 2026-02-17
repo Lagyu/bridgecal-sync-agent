@@ -19,6 +19,7 @@ class GoogleConfig:
     calendar_id: str
     client_secret_path: Path
     token_path: Path
+    insecure_tls_skip_verify: bool = True
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     """
     data_dir = default_data_dir()
     cfg_path = path or (data_dir / "config.toml")
-    raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    raw = tomllib.loads(cfg_path.read_text(encoding="utf-8-sig"))
 
     data_dir = Path(raw.get("data_dir", str(data_dir)))
 
@@ -55,6 +56,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     google_raw = raw.get("google", {})
     client_secret = Path(google_raw.get("client_secret_path", "google_client_secret.json"))
     token_path = Path(google_raw.get("token_path", "google_token.json"))
+    insecure_tls_skip_verify = _parse_bool(google_raw.get("insecure_tls_skip_verify"), default=True)
     if not client_secret.is_absolute():
         client_secret = data_dir / client_secret
     if not token_path.is_absolute():
@@ -64,6 +66,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         calendar_id=str(google_raw["calendar_id"]),
         client_secret_path=client_secret,
         token_path=token_path,
+        insecure_tls_skip_verify=insecure_tls_skip_verify,
     )
 
     sync_raw = raw.get("sync", {})
@@ -73,3 +76,15 @@ def load_config(path: Path | None = None) -> AppConfig:
     )
 
     return AppConfig(data_dir=data_dir, outlook=outlook, google=google, sync=sync)
+
+
+def _parse_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default

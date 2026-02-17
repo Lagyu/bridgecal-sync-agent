@@ -49,6 +49,7 @@ def sync(
             calendar_id=cfg.google.calendar_id,
             client_secret_path=cfg.google.client_secret_path,
             token_path=cfg.google.token_path,
+            insecure_tls_skip_verify=cfg.google.insecure_tls_skip_verify,
         ),
         store=store,
     )
@@ -64,6 +65,10 @@ def sync(
             "sync: "
             f"outlook={stats.outlook_scanned} "
             f"google={stats.google_scanned} "
+            f"outlook_src={stats.outlook_sources} "
+            f"google_src={stats.google_sources} "
+            f"outlook_mirror={stats.outlook_mirrors} "
+            f"google_mirror={stats.google_mirrors} "
             f"create_g={stats.created_in_google} "
             f"update_g={stats.updated_in_google} "
             f"delete_g={stats.deleted_in_google} "

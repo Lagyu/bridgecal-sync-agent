@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from importlib import import_module, util
+from pathlib import Path
+from subprocess import DEVNULL, Popen
+from time import sleep
 from typing import Any
 
 from .sync.models import CanonicalEvent, EventTime, compute_fingerprint
@@ -13,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 pythoncom = import_module("pythoncom") if util.find_spec("pythoncom") else None
 win32_client = import_module("win32com.client") if util.find_spec("win32com.client") else None
+winreg = import_module("winreg") if util.find_spec("winreg") else None
 
 OL_APPOINTMENT_ITEM = 1
 OL_FOLDER_CALENDAR = 9
@@ -22,6 +27,33 @@ OL_NON_MEETING = 0
 OL_USER_PROPERTY_TEXT = 1
 MIRROR_ORIGIN_PROP = "BridgeCalOrigin"
 MIRROR_GOOGLE_ID_PROP = "BridgeCalGoogleId"
+OUTLOOK_PROG_ID = "Outlook.Application"
+OUTLOOK_APPLICATION_CLSID = "{0006F03A-0000-0000-C000-000000000046}"
+OUTLOOK_CONNECT_RETRIES = 6
+OUTLOOK_CONNECT_RETRY_DELAY_SECONDS = 2.0
+OUTLOOK_CALL_REJECTED_HRESULT = -2147418111
+
+
+def _extract_executable_path(command: str) -> str | None:
+    text = command.strip()
+    if not text:
+        return None
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        if end <= 1:
+            return None
+        return text[1:end].strip() or None
+    return text.split(" ", 1)[0].strip() or None
+
+
+def _is_outlook_busy_error(exc: Exception) -> bool:
+    if "call was rejected by callee" in str(exc).lower():
+        return True
+    args = getattr(exc, "args", ())
+    if not args:
+        return False
+    code = args[0]
+    return isinstance(code, int) and code == OUTLOOK_CALL_REJECTED_HRESULT
 
 
 class OutlookClient:
@@ -77,9 +109,101 @@ class OutlookClient:
             raise RuntimeError("pywin32 is unavailable; Outlook COM requires Windows + pywin32.")
 
         pythoncom.CoInitialize()
-        self._application = win32_client.Dispatch("Outlook.Application")
-        self._namespace = self._application.GetNamespace("MAPI")
+        last_error: Exception | None = None
+        launched_outlook = False
+        for attempt in range(OUTLOOK_CONNECT_RETRIES):
+            for dispatch_name in ("Dispatch", "DispatchEx"):
+                dispatch = getattr(win32_client, dispatch_name, None)
+                if dispatch is None:
+                    continue
+                try:
+                    self._application = dispatch(OUTLOOK_PROG_ID)
+                    break
+                except Exception as exc:  # pragma: no cover - requires live Outlook COM
+                    last_error = exc
+            if self._application is not None:
+                break
+
+            if not launched_outlook:
+                launched_outlook = self._launch_outlook_process()
+            if attempt < OUTLOOK_CONNECT_RETRIES - 1:
+                sleep(OUTLOOK_CONNECT_RETRY_DELAY_SECONDS)
+        if self._application is None:
+            launch_hint = (
+                " BridgeCal attempted to launch classic Outlook automatically."
+                if launched_outlook
+                else ""
+            )
+            raise RuntimeError(
+                "Unable to connect to Outlook COM. Ensure classic Outlook desktop "
+                "(not new Outlook) is installed, profile is configured, and Outlook "
+                f"can open interactively.{launch_hint}"
+            ) from last_error
+
+        for attempt in range(OUTLOOK_CONNECT_RETRIES):
+            try:
+                self._namespace = self._application.GetNamespace("MAPI")
+                break
+            except Exception as exc:  # pragma: no cover - requires live Outlook COM
+                last_error = exc
+                if attempt < OUTLOOK_CONNECT_RETRIES - 1:
+                    sleep(OUTLOOK_CONNECT_RETRY_DELAY_SECONDS)
+
+        if self._namespace is None:
+            raise RuntimeError(
+                "Connected to Outlook.Application, but failed to open MAPI namespace. "
+                "Open classic Outlook once interactively and complete any "
+                "first-run/profile prompts."
+            ) from last_error
         return self._namespace
+
+    def _launch_outlook_process(self) -> bool:
+        for candidate in self._outlook_executable_candidates():
+            path = Path(candidate)
+            if not path.exists():
+                continue
+            try:
+                Popen([str(path)], stdout=DEVNULL, stderr=DEVNULL)
+                logger.info("Started Outlook executable to warm up COM: %s", path)
+                return True
+            except Exception:  # pragma: no cover - requires live Outlook executable
+                logger.debug("Failed to launch Outlook executable: %s", path, exc_info=True)
+        return False
+
+    def _outlook_executable_candidates(self) -> list[str]:
+        candidates: list[str] = []
+
+        if winreg is not None:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CLASSES_ROOT,
+                    rf"CLSID\{OUTLOOK_APPLICATION_CLSID}\LocalServer32",
+                ) as key:
+                    value, _ = winreg.QueryValueEx(key, None)
+                parsed = _extract_executable_path(str(value))
+                if parsed:
+                    candidates.append(parsed)
+            except Exception:  # pragma: no cover - registry may be unavailable
+                logger.debug("Unable to read Outlook LocalServer32 registration.", exc_info=True)
+
+        for env_key in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(env_key, "").strip()
+            if not base:
+                continue
+            candidates.append(
+                str(Path(base) / "Microsoft Office" / "root" / "Office16" / "OUTLOOK.EXE")
+            )
+
+        # Keep insertion order while removing duplicates case-insensitively.
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = candidate.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(candidate)
+        return unique
 
     def _ensure_app(self) -> Any:
         if self._application is not None:
@@ -91,7 +215,20 @@ class OutlookClient:
 
     def _ensure_calendar_folder(self) -> Any:
         namespace = self._ensure_namespace()
-        return namespace.GetDefaultFolder(OL_FOLDER_CALENDAR)
+        last_error: Exception | None = None
+        for attempt in range(OUTLOOK_CONNECT_RETRIES):
+            try:
+                return namespace.GetDefaultFolder(OL_FOLDER_CALENDAR)
+            except Exception as exc:  # pragma: no cover - requires live Outlook COM
+                last_error = exc
+                if not _is_outlook_busy_error(exc):
+                    raise
+                if attempt < OUTLOOK_CONNECT_RETRIES - 1:
+                    sleep(OUTLOOK_CONNECT_RETRY_DELAY_SECONDS)
+        raise RuntimeError(
+            "Outlook COM is busy and rejected calendar access. Ensure Outlook is responsive "
+            "and no startup/profile dialog is open."
+        ) from last_error
 
     def _calendar_items(self, window_start: datetime, window_end: datetime) -> Any:
         folder = self._ensure_calendar_folder()
@@ -138,14 +275,24 @@ class OutlookClient:
         return replace(event, fingerprint=compute_fingerprint(event))
 
     def _event_time(self, item: Any) -> EventTime:
-        start_dt = self._to_aware_datetime(getattr(item, "Start", None))
-        end_dt = self._to_aware_datetime(getattr(item, "End", None))
-        if start_dt is None or end_dt is None:
-            raise ValueError("Outlook item missing start/end.")
-
         all_day = bool(getattr(item, "AllDayEvent", False))
         if all_day:
-            return EventTime(start_date=start_dt.date(), end_date=end_dt.date())
+            start_local = self._to_wall_datetime(getattr(item, "Start", None))
+            end_local = self._to_wall_datetime(getattr(item, "End", None))
+            if start_local is None or end_local is None:
+                raise ValueError("Outlook all-day item missing start/end.")
+            return EventTime(start_date=start_local.date(), end_date=end_local.date())
+
+        # Outlook COM can expose Start/End with a misleading UTC tzinfo even when
+        # the wall-clock value is local time. StartUTC/EndUTC are the reliable
+        # absolute timestamps for timed events.
+        start_dt = self._to_aware_datetime(getattr(item, "StartUTC", None))
+        end_dt = self._to_aware_datetime(getattr(item, "EndUTC", None))
+        if start_dt is None or end_dt is None:
+            start_dt = self._to_aware_datetime(getattr(item, "Start", None))
+            end_dt = self._to_aware_datetime(getattr(item, "End", None))
+        if start_dt is None or end_dt is None:
+            raise ValueError("Outlook item missing start/end.")
         return EventTime(start_dt=start_dt, end_dt=end_dt)
 
     def _event_id(self, item: Any, time_info: EventTime) -> str:
@@ -172,8 +319,19 @@ class OutlookClient:
         if not isinstance(value, datetime):
             return None
         if value.tzinfo is not None:
+            return value.astimezone(UTC)
+
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            return value.replace(tzinfo=UTC)
+        return value.replace(tzinfo=local_tz).astimezone(UTC)
+
+    def _to_wall_datetime(self, value: Any) -> datetime | None:
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
             return value
-        return value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return value.replace(tzinfo=None)
 
     def _get_user_prop(self, item: Any, name: str) -> str:
         props = getattr(item, "UserProperties", None)
@@ -230,5 +388,13 @@ class OutlookClient:
         if source.time.start_dt is None or source.time.end_dt is None:
             raise ValueError("Timed source is missing start/end.")
         item.AllDayEvent = False
-        item.Start = source.time.start_dt.astimezone().replace(tzinfo=None)
-        item.End = source.time.end_dt.astimezone().replace(tzinfo=None)
+        item.StartUTC = self._to_outlook_utc_datetime(source.time.start_dt)
+        item.EndUTC = self._to_outlook_utc_datetime(source.time.end_dt)
+
+    def _to_outlook_utc_datetime(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            local_tz = datetime.now().astimezone().tzinfo
+            if local_tz is None:
+                return value.replace(tzinfo=UTC)
+            return value.replace(tzinfo=local_tz).astimezone(UTC)
+        return value.astimezone(UTC)

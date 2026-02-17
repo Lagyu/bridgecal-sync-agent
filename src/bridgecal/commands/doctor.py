@@ -34,14 +34,14 @@ def doctor(
         typer.echo("[ok] Outlook COM access")
     except Exception as exc:
         logger.exception("Outlook doctor check failed")
-        code = 2 if "pywin32" in str(exc).lower() else 4
-        failures.append((code, f"Outlook check failed: {exc}"))
+        failures.append((_classify_outlook_failure(exc), f"Outlook check failed: {exc}"))
 
     try:
         GoogleClient(
             calendar_id=cfg.google.calendar_id,
             client_secret_path=cfg.google.client_secret_path,
             token_path=cfg.google.token_path,
+            insecure_tls_skip_verify=cfg.google.insecure_tls_skip_verify,
         ).health_check()
         typer.echo("[ok] Google Calendar auth + access")
     except Exception as exc:
@@ -89,5 +89,16 @@ def _classify_google_failure(exc: Exception) -> int:
     if "invalid_grant" in text or "unauthorized" in text or "token" in text:
         return 3
     if "client secret" in text or "credentials" in text:
+        return 2
+    return 4
+
+
+def _classify_outlook_failure(exc: Exception) -> int:
+    text = str(exc).lower()
+    if "pywin32" in text:
+        return 2
+    if "outlook com" in text:
+        return 2
+    if "server execution failed" in text or "operation unavailable" in text:
         return 2
     return 4

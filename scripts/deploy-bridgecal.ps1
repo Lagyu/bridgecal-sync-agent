@@ -81,7 +81,7 @@ function Install-WithWinget {
 
 function Test-Python312 {
     try {
-        & py -3.12 -c "import sys" | Out-Null
+        & py -3.12 -c "import sys" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
@@ -141,6 +141,190 @@ function Ensure-Uv {
     }
 }
 
+function Stop-RunningBridgeCal {
+    param([string]$RepoRoot)
+
+    $taskName = "BridgeCal Sync Agent"
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName
+        if ($taskInfo.State -eq "Running") {
+            Stop-ScheduledTask -TaskName $taskName
+            Write-Step "Stopped running scheduled task '$taskName'."
+        }
+    } catch {
+        # task missing or scheduler unavailable; continue
+    }
+
+    $bridgecalExePath = (Join-Path $RepoRoot ".venv\\Scripts\\bridgecal.exe").ToLowerInvariant()
+    $repoRootLower = $RepoRoot.ToLowerInvariant()
+    $targets = New-Object System.Collections.Generic.List[int]
+
+    try {
+        $processes = Get-CimInstance Win32_Process
+    } catch {
+        return
+    }
+
+    foreach ($process in $processes) {
+        $exePath = [string]$process.ExecutablePath
+        $commandLine = [string]$process.CommandLine
+        $exeLower = if ([string]::IsNullOrWhiteSpace($exePath)) { "" } else { $exePath.ToLowerInvariant() }
+        $cmdLower = if ([string]::IsNullOrWhiteSpace($commandLine)) { "" } else { $commandLine.ToLowerInvariant() }
+
+        $isBridgecalExe = $exeLower -eq $bridgecalExePath
+        $isRepoBridgecalCmd = (
+            -not [string]::IsNullOrWhiteSpace($cmdLower) -and
+            $cmdLower.Contains($repoRootLower) -and
+            ($cmdLower.Contains("bridgecal") -or $cmdLower.Contains("run-bridgecal-daemon"))
+        )
+
+        if ($isBridgecalExe -or $isRepoBridgecalCmd) {
+            $pidValue = [int]$process.ProcessId
+            if ($pidValue -ne $PID -and -not $targets.Contains($pidValue)) {
+                $targets.Add($pidValue)
+            }
+        }
+    }
+
+    if ($targets.Count -eq 0) {
+        return
+    }
+
+    foreach ($pidValue in $targets) {
+        try {
+            Stop-Process -Id $pidValue -Force -ErrorAction Stop
+        } catch {
+            # already exited or inaccessible; continue
+        }
+    }
+    Write-Step "Stopped $($targets.Count) running BridgeCal process(es)."
+}
+
+function Write-Utf8NoBomFile {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+function Read-Utf8NoBomText {
+    param(
+        [string]$Path,
+        [string]$FriendlyName
+    )
+
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+    } catch {
+        Fail "Unable to read $FriendlyName at $Path"
+    }
+
+    $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    if ($hasBom) {
+        Write-Step "$FriendlyName has UTF-8 BOM. Converting to UTF-8 without BOM."
+        if ($bytes.Length -eq 3) {
+            return ""
+        }
+        $bytes = $bytes[3..($bytes.Length - 1)]
+    }
+
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try {
+        return $strictUtf8.GetString($bytes)
+    } catch {
+        Fail "$FriendlyName must be UTF-8 text: $Path"
+    }
+}
+
+function Normalize-Utf8NoBomFile {
+    param(
+        [string]$Path,
+        [string]$FriendlyName = "File"
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    $text = Read-Utf8NoBomText -Path $Path -FriendlyName $FriendlyName
+    Write-Utf8NoBomFile -Path $Path -Content $text
+}
+
+function Normalize-JsonFileUtf8NoBom {
+    param(
+        [string]$Path,
+        [string]$FriendlyName
+    )
+
+    $text = Read-Utf8NoBomText -Path $Path -FriendlyName $FriendlyName
+
+    try {
+        $null = $text | ConvertFrom-Json
+    } catch {
+        Fail "$FriendlyName is not valid JSON: $Path"
+    }
+
+    Write-Utf8NoBomFile -Path $Path -Content $text
+}
+
+function Validate-DesktopClientSecretJsonObject {
+    param(
+        [object]$Json,
+        [string]$FriendlyName
+    )
+
+    if (-not ($Json.PSObject.Properties.Name -contains "installed")) {
+        Fail "$FriendlyName must contain an 'installed' object. Create OAuth Client ID type 'Desktop app' in Google Cloud and download the JSON."
+    }
+
+    $installed = $Json.installed
+    $requiredFields = @("client_id", "client_secret", "auth_uri", "token_uri", "redirect_uris")
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($field in $requiredFields) {
+        if (-not ($installed.PSObject.Properties.Name -contains $field)) {
+            $missing.Add($field)
+            continue
+        }
+
+        $value = $installed.$field
+        if ($null -eq $value) {
+            $missing.Add($field)
+            continue
+        }
+
+        if ($field -ne "redirect_uris" -and [string]::IsNullOrWhiteSpace([string]$value)) {
+            $missing.Add($field)
+            continue
+        }
+
+        if ($field -eq "redirect_uris" -and @($value).Count -eq 0) {
+            $missing.Add($field)
+            continue
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $names = [string]::Join(", ", $missing)
+        Fail "$FriendlyName is missing required fields: $names"
+    }
+
+    $redirectUris = @($installed.redirect_uris)
+    $hasLocalRedirect = $false
+    foreach ($uri in $redirectUris) {
+        if ($uri -is [string] -and ($uri.StartsWith("http://localhost") -or $uri.StartsWith("http://127.0.0.1"))) {
+            $hasLocalRedirect = $true
+            break
+        }
+    }
+    if (-not $hasLocalRedirect) {
+        Fail "$FriendlyName is not a valid Desktop app OAuth credential. redirect_uris must include localhost/127.0.0.1."
+    }
+}
+
 function Write-ConfigFile {
     param(
         [string]$ConfigPath,
@@ -160,13 +344,14 @@ future_days = 180
 calendar_id = "$CalendarId"
 client_secret_path = "google_client_secret.json"
 token_path = "google_token.json"
+insecure_tls_skip_verify = true
 
 [sync]
 interval_seconds = $SyncIntervalSeconds
 redaction_mode = "none"
 "@
 
-    Set-Content -Path $ConfigPath -Encoding utf8 -Value $content
+    Write-Utf8NoBomFile -Path $ConfigPath -Content $content
 }
 
 function Save-ClientSecretJson {
@@ -177,6 +362,10 @@ function Save-ClientSecretJson {
     if (Test-Path $DestinationPath) {
         $overwrite = Confirm-YesNo -Prompt "google_client_secret.json already exists. Overwrite?" -Default $false
         if (-not $overwrite) {
+            Normalize-JsonFileUtf8NoBom -Path $DestinationPath -FriendlyName "Existing google_client_secret.json"
+            $existingText = Read-Utf8NoBomText -Path $DestinationPath -FriendlyName "Existing google_client_secret.json"
+            $existingJson = $existingText | ConvertFrom-Json
+            Validate-DesktopClientSecretJsonObject -Json $existingJson -FriendlyName "Existing google_client_secret.json"
             Write-Step "Keeping existing client secret file."
             return
         }
@@ -188,8 +377,8 @@ function Save-ClientSecretJson {
 
     $jsonText = ""
     if (-not [string]::IsNullOrWhiteSpace($sourcePath)) {
-        $resolved = Resolve-Path $sourcePath -ErrorAction Stop
-        $jsonText = Get-Content -Path $resolved -Raw
+        $resolved = (Resolve-Path $sourcePath -ErrorAction Stop).Path
+        $jsonText = Read-Utf8NoBomText -Path $resolved -FriendlyName "Source client secret JSON"
     } else {
         Write-Host "Paste JSON now. Type ENDJSON on a new line when done."
         $lines = New-Object System.Collections.Generic.List[string]
@@ -206,17 +395,17 @@ function Save-ClientSecretJson {
     if ([string]::IsNullOrWhiteSpace($jsonText)) {
         Fail "Client secret JSON was empty."
     }
+    $jsonText = $jsonText.TrimStart([char]0xFEFF)
 
     try {
         $json = $jsonText | ConvertFrom-Json
-        if (-not ($json.PSObject.Properties.Name -contains "installed")) {
-            Write-Warning "The JSON does not contain an 'installed' block. Ensure this is a Desktop app OAuth credential."
-        }
     } catch {
-        Fail "The provided client secret is not valid JSON."
+        Fail "The provided client secret is not valid JSON. $($_.Exception.Message)"
     }
 
-    Set-Content -Path $DestinationPath -Encoding utf8 -Value $jsonText
+    Validate-DesktopClientSecretJsonObject -Json $json -FriendlyName "google_client_secret.json"
+
+    Write-Utf8NoBomFile -Path $DestinationPath -Content $jsonText
     Write-Step "Saved Google client secret to $DestinationPath"
 }
 
@@ -241,8 +430,23 @@ Ensure-Uv
 
 Write-Step "Installing dependencies with uv sync..."
 Push-Location $RepoRoot
-& uv sync
-if ($LASTEXITCODE -ne 0) {
+Stop-RunningBridgeCal -RepoRoot $RepoRoot
+
+$syncSucceeded = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+    & uv sync
+    if ($LASTEXITCODE -eq 0) {
+        $syncSucceeded = $true
+        break
+    }
+
+    if ($attempt -eq 1) {
+        Write-Warning "uv sync failed (attempt 1). Retrying after stopping BridgeCal processes."
+        Stop-RunningBridgeCal -RepoRoot $RepoRoot
+    }
+}
+
+if (-not $syncSucceeded) {
     Pop-Location
     Fail "uv sync failed."
 }
@@ -264,6 +468,7 @@ if (Test-Path $configPath) {
         Write-ConfigFile -ConfigPath $configPath -TomlDataDir $tomlDataDir -CalendarId $calendarId -SyncIntervalSeconds $IntervalSeconds
         Write-Step "Wrote config to $configPath"
     } else {
+        Normalize-Utf8NoBomFile -Path $configPath -FriendlyName "Existing config.toml"
         Write-Step "Keeping existing config: $configPath"
     }
 } else {
@@ -311,7 +516,7 @@ if (-not $SkipScheduledTask) {
 
         $action = New-ScheduledTaskAction -Execute $psExe -Argument $taskArgs
         $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel LeastPrivilege
+        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "BridgeCal Outlook<->Google sync daemon." -Force | Out-Null

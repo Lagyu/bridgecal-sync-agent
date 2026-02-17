@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 class SyncStats:
     outlook_scanned: int = 0
     google_scanned: int = 0
+    outlook_sources: int = 0
+    google_sources: int = 0
+    outlook_mirrors: int = 0
+    google_mirrors: int = 0
     created_in_google: int = 0
     updated_in_google: int = 0
     deleted_in_google: int = 0
@@ -68,6 +72,10 @@ class SyncEngine:
         google_all = self._index_events(google_events)
         outlook_sources = {k: v for k, v in outlook_all.items() if not v.is_mirror}
         google_sources = {k: v for k, v in google_all.items() if not v.is_mirror}
+        stats.outlook_sources = len(outlook_sources)
+        stats.google_sources = len(google_sources)
+        stats.outlook_mirrors = len(outlook_all) - len(outlook_sources)
+        stats.google_mirrors = len(google_all) - len(google_sources)
 
         consumed_outlook_sources: set[str] = set()
         consumed_google_sources: set[str] = set()
@@ -122,9 +130,13 @@ class SyncEngine:
             stats.created_in_outlook += 1
 
         logger.info(
-            "sync summary outlook_scanned=%s google_scanned=%s create_g=%s update_g=%s delete_g=%s create_o=%s update_o=%s delete_o=%s",
+            "sync summary outlook_scanned=%s google_scanned=%s outlook_sources=%s google_sources=%s outlook_mirrors=%s google_mirrors=%s create_g=%s update_g=%s delete_g=%s create_o=%s update_o=%s delete_o=%s",
             stats.outlook_scanned,
             stats.google_scanned,
+            stats.outlook_sources,
+            stats.google_sources,
+            stats.outlook_mirrors,
+            stats.google_mirrors,
             stats.created_in_google,
             stats.updated_in_google,
             stats.deleted_in_google,

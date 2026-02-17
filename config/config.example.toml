@@ -14,6 +14,7 @@ calendar_id = "primary"
 # Paths can be relative to the data_dir if you like.
 client_secret_path = "google_client_secret.json"
 token_path = "google_token.json"
+insecure_tls_skip_verify = true
 
 [sync]
 interval_seconds = 120
