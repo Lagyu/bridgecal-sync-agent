@@ -1,8 +1,8 @@
-# かんたん予定同期（BridgeCal）
+# かんたん予定確認・同期（BridgeCal）
 
 [English README](README.en.md)
 
-かんたん予定同期（内部名: BridgeCal）は、2 つのカレンダーを同期する **単一ユーザー向け**・**ローカル実行** の同期エージェントです。
+かんたん予定確認・同期（内部名: BridgeCal）は、2 つのカレンダーを同期する **単一ユーザー向け**・**ローカル実行** の同期エージェントです。
 
 - Microsoft Outlook デスクトップ カレンダー（A 社、Windows、Graph/EWS 不可）
 - Google カレンダー（B 社）
@@ -21,7 +21,7 @@ uv run bridgecal gui
 
 ## Windows へのデプロイ
 
-かんたん予定同期（BridgeCal）の実行には以下が必要です。
+かんたん予定確認・同期（BridgeCal）の実行には以下が必要です。
 - Outlook デスクトップがそのマシンで設定済みであること（COM アクセス）
 - OAuth **Desktop app** 用の Google OAuth クライアントシークレット JSON
 - Python 3.12 以上
@@ -94,6 +94,10 @@ GUI でできること:
   - thinking モード固定 + 最大出力 16384 トークン
   - ポップアップ内の専用ログ欄に `<think>...</think>` と `<answer>...</answer>` を逐次表示
 - UI は日本語が初期表示で、言語切替で英語表示に変更可能
+
+GUI 動作イメージ:
+
+![空き時間チェックの動作イメージ](docs/images/availability-check-demo-tsuge.png)
 
 空き時間パースでローカル LFM2.5 を使う場合:
 - `transformers` + `torch` を利用します

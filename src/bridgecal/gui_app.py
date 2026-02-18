@@ -47,7 +47,7 @@ from .windows_scheduler import (
 if TYPE_CHECKING:
     from .availability import AvailabilityConflict, AvailabilityResult
 
-WINDOW_TITLE = "かんたん予定同期"
+WINDOW_TITLE = "かんたん予定確認・同期"
 LANG_JA = "ja"
 LANG_EN = "en"
 AVAILABILITY_MODEL_IDS: tuple[str, str] = (
@@ -58,8 +58,8 @@ AVAILABILITY_MAX_NEW_TOKENS = 16_384
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     LANG_JA: {
-        "window_title": "かんたん予定同期",
-        "title_text": "かんたん予定同期",
+        "window_title": "かんたん予定確認・同期",
+        "title_text": "かんたん予定確認・同期",
         "hint_text": (
             "かんたん3ステップ:\n1) 接続チェック\n2) 今すぐ同期\n3) 自動同期をON（管理者権限）"
         ),
@@ -512,7 +512,7 @@ class BridgeCalWindow(QWidget):
         self.language_selector.addItem("English", LANG_EN)
         self.language_selector.setCurrentIndex(0)
 
-        self.title_label = QLabel("かんたん予定同期")
+        self.title_label = QLabel("かんたん予定確認・同期")
         self.title_label.setObjectName("titleText")
         self.hint_label = QLabel(
             "Simple steps:\n1) Check Connection\n2) Sync Now\n3) Turn ON Auto Sync (Admin)"
