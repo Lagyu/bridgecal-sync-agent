@@ -56,7 +56,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     google_raw = raw.get("google", {})
     client_secret = Path(google_raw.get("client_secret_path", "google_client_secret.json"))
     token_path = Path(google_raw.get("token_path", "google_token.json"))
-    insecure_tls_skip_verify = _parse_bool(google_raw.get("insecure_tls_skip_verify"), default=True)
+    insecure_tls_skip_verify = _parse_bool(
+        google_raw.get("insecure_tls_skip_verify"),
+        default=True,
+    )
     if not client_secret.is_absolute():
         client_secret = data_dir / client_secret
     if not token_path.is_absolute():

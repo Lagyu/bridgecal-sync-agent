@@ -41,8 +41,9 @@ Actions:
   - `token_uri`
   - `redirect_uris` containing `http://localhost` (or `http://127.0.0.1`)
 - Ensure `google_client_secret.json` is encoded as UTF-8 **without BOM**.
-- If your network injects a corporate/self-signed certificate, set
-  `google.insecure_tls_skip_verify = true` in `config.toml`.
+- If your network injects a corporate/self-signed certificate, install the corporate CA if
+  possible. As a temporary workaround, set `google.insecure_tls_skip_verify = true` in
+  `config.toml`.
 
 ## Duplicate events / loops
 

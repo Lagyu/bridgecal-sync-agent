@@ -27,8 +27,11 @@ Recommended:
 By default, logs must:
 - Include IDs, counts, timestamps, errors.
 - Exclude event body and attendees.
+- Exclude OAuth callback query details (authorization `code`, `state`).
 - Optionally include event summaries for debugging behind `--debug`.
 
 ## Network
 
 Only Google Calendar API endpoints are required. No inbound ports.
+- This repository defaults `google.insecure_tls_skip_verify = true` for corporate/self-signed
+  TLS interception environments.

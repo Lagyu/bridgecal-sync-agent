@@ -33,6 +33,8 @@ Environment overrides:
 - `BRIDGECAL_LFM25_LOCAL_DEVICE` (`cpu` or `auto`, default `cpu`)
 - `BRIDGECAL_LFM25_LOCAL_TORCH_DTYPE` (default `float32`)
 - `BRIDGECAL_LFM25_LOCAL_MAX_NEW_TOKENS` (default `220`)
+- `BRIDGECAL_LFM25_ALLOW_REMOTE_CODE` (`false` by default; set `true` only if a chosen model
+  explicitly requires remote code)
 
 Note:
 - In the GUI popup, model is selected in-UI and parsing is forced to thinking mode with `16384` max tokens.

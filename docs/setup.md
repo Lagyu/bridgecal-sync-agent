@@ -29,7 +29,8 @@ Then edit:
 - the Google calendar id
 - sync window
 - polling interval
-- `google.insecure_tls_skip_verify` (`true` ignores TLS cert validation for Google API calls)
+- `google.insecure_tls_skip_verify` (default `true`; set `false` if your network supports
+  standard certificate validation)
 
 ## First run
 

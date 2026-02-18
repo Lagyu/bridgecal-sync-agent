@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -183,6 +184,57 @@ def test_parse_natural_time_range_requires_transformers(
 
     with pytest.raises(RuntimeError, match="transformers is unavailable"):
         parse_natural_time_range("明日の10時から17時", now=now, preferred_language="ja")
+
+
+def test_lfm_pipeline_disables_remote_code_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyPipe:
+        def __init__(self) -> None:
+            self.model = SimpleNamespace(generation_config=SimpleNamespace(max_length=20))
+
+    def fake_pipeline(**kwargs: object) -> DummyPipe:
+        captured.update(kwargs)
+        return DummyPipe()
+
+    monkeypatch.setattr(
+        availability_module, "transformers", SimpleNamespace(pipeline=fake_pipeline)
+    )
+    monkeypatch.setattr(availability_module, "torch", None)
+    monkeypatch.delenv("BRIDGECAL_LFM25_ALLOW_REMOTE_CODE", raising=False)
+    availability_module._pipeline_cache.clear()
+    availability_module._pipeline_failed_models.clear()
+
+    pipe = availability_module._lfm_transformers_pipeline(model_id="Qwen/Qwen3-1.7B")
+
+    assert captured["trust_remote_code"] is False
+    assert pipe.model.generation_config.max_length is None
+
+
+def test_lfm_pipeline_allows_remote_code_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyPipe:
+        def __init__(self) -> None:
+            self.model = SimpleNamespace(generation_config=SimpleNamespace(max_length=20))
+
+    def fake_pipeline(**kwargs: object) -> DummyPipe:
+        captured.update(kwargs)
+        return DummyPipe()
+
+    monkeypatch.setattr(
+        availability_module, "transformers", SimpleNamespace(pipeline=fake_pipeline)
+    )
+    monkeypatch.setattr(availability_module, "torch", None)
+    monkeypatch.setenv("BRIDGECAL_LFM25_ALLOW_REMOTE_CODE", "true")
+    availability_module._pipeline_cache.clear()
+    availability_module._pipeline_failed_models.clear()
+
+    availability_module._lfm_transformers_pipeline(model_id="Qwen/Qwen3-1.7B")
+
+    assert captured["trust_remote_code"] is True
 
 
 def test_thinking_models_do_not_force_json_prefill() -> None:

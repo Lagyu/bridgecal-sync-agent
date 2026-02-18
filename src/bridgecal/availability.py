@@ -517,11 +517,12 @@ def _lfm_transformers_pipeline(*, model_id: str) -> Any:
         if pipeline_builder is None:
             raise RuntimeError("transformers.pipeline is unavailable.")
 
+        allow_remote_code = _read_lfm_allow_remote_code()
         pipeline_kwargs: dict[str, Any] = {
             "task": "text-generation",
             "model": model_id,
             "tokenizer": model_id,
-            "trust_remote_code": True,
+            "trust_remote_code": allow_remote_code,
         }
         model_kwargs: dict[str, Any] = {}
         dtype_name = _read_lfm_torch_dtype()
@@ -542,6 +543,12 @@ def _lfm_transformers_pipeline(*, model_id: str) -> Any:
             pipe = pipeline_builder(**pipeline_kwargs)
         except Exception as exc:
             _pipeline_failed_models.add(model_id)
+            if not allow_remote_code:
+                raise RuntimeError(
+                    "Failed to initialize local transformers model: "
+                    f"{model_id}. If this model requires remote code, set "
+                    "BRIDGECAL_LFM25_ALLOW_REMOTE_CODE=true explicitly."
+                ) from exc
             raise RuntimeError(
                 f"Failed to initialize local transformers model: {model_id}"
             ) from exc
@@ -1322,6 +1329,21 @@ def _read_lfm_torch_dtype() -> str:
     if value:
         return value
     return "float32"
+
+
+def _read_lfm_allow_remote_code() -> bool:
+    return _read_env_bool("BRIDGECAL_LFM25_ALLOW_REMOTE_CODE", default=False)
+
+
+def _read_env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _read_env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:

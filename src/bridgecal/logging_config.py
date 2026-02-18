@@ -4,11 +4,19 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+NOISY_OAUTH_LOGGERS = (
+    "google_auth_oauthlib.flow",
+    "oauthlib",
+    "requests_oauthlib",
+)
+
 
 def configure_logging(log_path: Path, level: str = "INFO") -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
     root.setLevel(level)
 
     fmt = logging.Formatter(
@@ -25,3 +33,6 @@ def configure_logging(log_path: Path, level: str = "INFO") -> None:
     )
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
+
+    for logger_name in NOISY_OAUTH_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
