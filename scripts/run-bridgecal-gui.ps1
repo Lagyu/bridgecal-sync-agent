@@ -160,7 +160,9 @@ if failures:
     raise SystemExit(1)
 '@
 
-    & uv run python -c $probeScript
+    # Feed the probe script via stdin to avoid quote-mangling when PowerShell
+    # passes multiline code to `python -c`.
+    $probeScript | & uv run python -
     return ($LASTEXITCODE -eq 0)
 }
 
